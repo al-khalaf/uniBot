@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>uniBot Control Center</title>
+    <link rel="stylesheet" href="/frontend/styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1>uniBot Campus Orchestrator</h1>
+      <p class="lead">
+        Run smart student services, generate AI-powered study support, and monitor wellness from a single console.
+      </p>
+    </header>
+
+    <main>
+      <section class="card">
+        <h2>AI Study Plan Generator</h2>
+        <form id="study-plan-form">
+          <div class="field-group">
+            <label for="profile">Student Profile (JSON)</label>
+            <textarea id="profile" placeholder='{"name":"Aisha", "year":"Sophomore"}'></textarea>
+          </div>
+          <div class="field-group">
+            <label for="courses">Courses (JSON Array)</label>
+            <textarea id="courses" placeholder='[{"code":"CS201","title":"Algorithms","credit_hours":3}]'></textarea>
+          </div>
+          <div class="field-group inline">
+            <label for="timeframe">Timeframe</label>
+            <input id="timeframe" type="text" value="Next 4 weeks" />
+            <label for="preferences">Preferences (JSON)</label>
+            <input id="preferences" type="text" placeholder='{"study_style":"visual"}' />
+          </div>
+          <button type="submit">Generate Study Plan</button>
+        </form>
+        <pre id="study-plan-output" class="output" aria-live="polite"></pre>
+      </section>
+
+      <section class="card">
+        <h2>Policy / Document Summariser</h2>
+        <form id="summary-form">
+          <div class="field-group">
+            <label for="summary-text">Paste long text</label>
+            <textarea id="summary-text" placeholder="Paste handbook text, policy, or meeting transcript"></textarea>
+          </div>
+          <div class="field-group inline">
+            <label for="summary-audience">Audience (optional)</label>
+            <input id="summary-audience" type="text" placeholder="Parents, advisors, faculty..." />
+          </div>
+          <button type="submit">Summarise</button>
+        </form>
+        <pre id="summary-output" class="output" aria-live="polite"></pre>
+      </section>
+
+      <section class="card">
+        <h2>Mental Health Pulse Check</h2>
+        <form id="mood-form">
+          <div class="field-group">
+            <label for="mood-entries">Student reflections (one per line)</label>
+            <textarea id="mood-entries" placeholder="I'm feeling overwhelmed...
+I loved today's lab!"></textarea>
+          </div>
+          <button type="submit">Classify Mood</button>
+        </form>
+        <pre id="mood-output" class="output" aria-live="polite"></pre>
+      </section>
+    </main>
+
+    <footer>
+      <p>Configure your <code>OPENAI_API_KEY</code> to enable AI features. All requests stay within your infra.</p>
+    </footer>
+
+    <script src="/frontend/main.js" type="module"></script>
+  </body>
+</html>
