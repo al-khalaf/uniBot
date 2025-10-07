@@ -144,6 +144,43 @@ class RiskLevel(enum.Enum):
     HIGH = "high"
 
 
+class FormStatus(enum.Enum):
+    DRAFT = "draft"
+    SUBMITTED = "submitted"
+    IN_REVIEW = "in_review"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
+class BookingStatus(enum.Enum):
+    RESERVED = "reserved"
+    CHECKED_OUT = "checked_out"
+    RETURNED = "returned"
+    CANCELLED = "cancelled"
+
+
+class PeerMatchStatus(enum.Enum):
+    PENDING = "pending"
+    MATCHED = "matched"
+    DECLINED = "declined"
+
+
+class GrantStatus(enum.Enum):
+    ACTIVE = "active"
+    COMPLETED = "completed"
+    ON_HOLD = "on_hold"
+
+
+class DisciplinaryStatus(enum.Enum):
+    OPEN = "open"
+    UNDER_REVIEW = "under_review"
+    RESOLVED = "resolved"
+
+
+class PluginStatus(enum.Enum):
+    ENABLED = "enabled"
+    DISABLED = "disabled"
+
 # --- Association tables --------------------------------------------------------
 
 user_roles = Table(
@@ -737,22 +774,26 @@ def create_app(db_url: str = "sqlite:///lms.db") -> Flask:
 # --- Attendance (per meeting occurrence) ---
 class Attendance(db.Model):
     __tablename__ = "attendance"
-    id = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=gen_uuid)
     # which occurrence of a recurring meeting?
-    class_date = db.Column(db.Date, nullable=False, index=True)
+    class_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
 
-    meeting_id = db.Column(db.Uuid, db.ForeignKey("class_meetings.id"), nullable=False, index=True)
-    student_id = db.Column(db.Uuid, db.ForeignKey("users.id"), nullable=False, index=True)
+    meeting_id: Mapped[uuid.UUID] = mapped_column(
+        UUIDType, ForeignKey("class_meetings.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    student_id: Mapped[uuid.UUID] = mapped_column(
+        UUIDType, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
 
     # present | late | absent | excused
-    status = db.Column(db.String(16), nullable=False)
-    notes = db.Column(db.String, nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text)
 
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     __table_args__ = (
-        db.UniqueConstraint("class_date", "meeting_id", "student_id", name="uq_attendance_one_per_student_per_occurrence"),
+        UniqueConstraint("class_date", "meeting_id", "student_id", name="uq_attendance_one_per_student_per_occurrence"),
     )
 
 # --- Submission model ---
@@ -777,6 +818,438 @@ class Submission(db.Model):
 
     assignment = relationship("Assignment", backref="submissions")
     student = relationship("User", backref="submissions")
+
+
+# --- Directory & departments ---------------------------------------------------
+
+class Department(db.Model):
+    __tablename__ = "departments"
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=gen_uuid)
+    school_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("schools.id", ondelete="CASCADE"), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    email: Mapped[str | None] = mapped_column(String(255))
+    phone: Mapped[str | None] = mapped_column(String(32))
+    website: Mapped[str | None] = mapped_column(String(255))
+    hours: Mapped[dict | None] = mapped_column(JSON)
+
+    services = relationship("DepartmentService", back_populates="department", cascade="all, delete-orphan")
+    locations = relationship("DepartmentLocation", back_populates="department", cascade="all, delete-orphan")
+
+    __table_args__ = (UniqueConstraint("school_id", "name", name="uq_department"),)
+
+
+class DepartmentService(db.Model):
+    __tablename__ = "department_services"
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=gen_uuid)
+    department_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("departments.id", ondelete="CASCADE"), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    delivery_channels: Mapped[list[str] | None] = mapped_column(JSON)  # walk-in, email, portal
+
+    department = relationship("Department", back_populates="services")
+
+
+class DepartmentLocation(db.Model):
+    __tablename__ = "department_locations"
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=gen_uuid)
+    department_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("departments.id", ondelete="CASCADE"), nullable=False)
+    building: Mapped[str | None] = mapped_column(String(128))
+    room: Mapped[str | None] = mapped_column(String(64))
+    latitude: Mapped[float | None] = mapped_column(db.Float)
+    longitude: Mapped[float | None] = mapped_column(db.Float)
+
+    department = relationship("Department", back_populates="locations")
+
+
+# --- Identity & access ---------------------------------------------------------
+
+class StudentIDCard(db.Model):
+    __tablename__ = "student_id_cards"
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=gen_uuid)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), unique=True)
+    card_number: Mapped[str] = mapped_column(String(64), unique=True)
+    issued_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime)
+    status: Mapped[str] = mapped_column(String(32), default="active")
+
+
+class AccessPermission(db.Model):
+    __tablename__ = "access_permissions"
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=gen_uuid)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    area: Mapped[str] = mapped_column(String(128))  # e.g., "Science Lab", "Dorm A"
+    granted_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    starts_at: Mapped[datetime | None] = mapped_column(DateTime)
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class ParkingPermit(db.Model):
+    __tablename__ = "parking_permits"
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=gen_uuid)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    vehicle_plate: Mapped[str] = mapped_column(String(32))
+    zone: Mapped[str | None] = mapped_column(String(32))
+    issued_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime)
+    status: Mapped[str] = mapped_column(String(32), default="active")
+
+
+# --- Financial planning --------------------------------------------------------
+
+class Scholarship(db.Model):
+    __tablename__ = "scholarships"
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=gen_uuid)
+    school_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("schools.id", ondelete="CASCADE"), nullable=False)
+    title: Mapped[str] = mapped_column(String(255))
+    description: Mapped[str | None] = mapped_column(Text)
+    amount: Mapped[int | None] = mapped_column(Integer)
+    eligibility: Mapped[dict | None] = mapped_column(JSON)  # structured rules
+    deadline: Mapped[date | None] = mapped_column(Date)
+
+
+class ScholarshipMatch(db.Model):
+    __tablename__ = "scholarship_matches"
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=gen_uuid)
+    scholarship_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("scholarships.id", ondelete="CASCADE"), nullable=False)
+    student_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    match_score: Mapped[float | None] = mapped_column(db.Float)
+    reason: Mapped[str | None] = mapped_column(Text)
+    notified_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+    __table_args__ = (UniqueConstraint("scholarship_id", "student_id", name="uq_scholarship_match"),)
+
+
+class PaymentPlan(db.Model):
+    __tablename__ = "payment_plans"
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=gen_uuid)
+    student_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    total_amount: Mapped[int] = mapped_column(Integer)
+    currency: Mapped[str] = mapped_column(String(8), default="USD")
+    start_date: Mapped[date] = mapped_column(Date)
+    end_date: Mapped[date] = mapped_column(Date)
+    status: Mapped[str] = mapped_column(String(32), default="active")
+
+    installments = relationship("PaymentInstallment", back_populates="plan", cascade="all, delete-orphan")
+
+
+class PaymentInstallment(db.Model):
+    __tablename__ = "payment_installments"
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=gen_uuid)
+    plan_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("payment_plans.id", ondelete="CASCADE"), nullable=False)
+    due_date: Mapped[date] = mapped_column(Date)
+    amount: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(32), default="pending")
+
+    plan = relationship("PaymentPlan", back_populates="installments")
+
+
+class FinancialAidDocument(db.Model):
+    __tablename__ = "financial_aid_documents"
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=gen_uuid)
+    student_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    doc_type: Mapped[str] = mapped_column(String(64))
+    status: Mapped[DocStatus] = mapped_column(Enum(DocStatus), default=DocStatus.SUBMITTED)
+    file_url: Mapped[str | None] = mapped_column(String(512))
+    submitted_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+# --- Custom forms & workflow ---------------------------------------------------
+
+class CustomForm(db.Model):
+    __tablename__ = "custom_forms"
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=gen_uuid)
+    school_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("schools.id", ondelete="CASCADE"), nullable=False)
+    title: Mapped[str] = mapped_column(String(255))
+    description: Mapped[str | None] = mapped_column(Text)
+    schema: Mapped[dict | None] = mapped_column(JSON)  # structured questions/fields
+    audience: Mapped[list[str] | None] = mapped_column(JSON)
+
+
+class CustomFormSubmission(db.Model):
+    __tablename__ = "custom_form_submissions"
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=gen_uuid)
+    form_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("custom_forms.id", ondelete="CASCADE"), nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    status: Mapped[FormStatus] = mapped_column(Enum(FormStatus), default=FormStatus.SUBMITTED)
+    data: Mapped[dict | None] = mapped_column(JSON)
+    submitted_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (UniqueConstraint("form_id", "user_id", name="uq_form_submission_once"),)
+
+
+# --- Smart reminders -----------------------------------------------------------
+
+class SmartReminder(db.Model):
+    __tablename__ = "smart_reminders"
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=gen_uuid)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    scope: Mapped[str] = mapped_column(String(64))  # course/assignment/exam
+    target_id: Mapped[uuid.UUID | None] = mapped_column(UUIDType)
+    channel: Mapped[NotificationChannel] = mapped_column(Enum(NotificationChannel))
+    message: Mapped[str] = mapped_column(Text)
+    send_at: Mapped[datetime] = mapped_column(DateTime)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+# --- Resource & lab booking ----------------------------------------------------
+
+class Resource(db.Model):
+    __tablename__ = "resources"
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=gen_uuid)
+    school_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("schools.id", ondelete="CASCADE"), nullable=False)
+    name: Mapped[str] = mapped_column(String(255))
+    resource_type: Mapped[str] = mapped_column(String(64))  # lab_room, equipment
+    capacity: Mapped[int | None] = mapped_column(Integer)
+    details: Mapped[dict | None] = mapped_column("metadata", JSON)
+
+
+class ResourceBooking(db.Model):
+    __tablename__ = "resource_bookings"
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=gen_uuid)
+    resource_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("resources.id", ondelete="CASCADE"), nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    starts_at: Mapped[datetime] = mapped_column(DateTime)
+    ends_at: Mapped[datetime] = mapped_column(DateTime)
+    status: Mapped[BookingStatus] = mapped_column(Enum(BookingStatus), default=BookingStatus.RESERVED)
+    notes: Mapped[str | None] = mapped_column(Text)
+
+
+# --- Peer finder ----------------------------------------------------------------
+
+class PeerMatchProfile(db.Model):
+    __tablename__ = "peer_match_profiles"
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=gen_uuid)
+    student_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), unique=True)
+    courses: Mapped[list[str] | None] = mapped_column(JSON)
+    interests: Mapped[list[str] | None] = mapped_column(JSON)
+    availability: Mapped[dict | None] = mapped_column(JSON)
+
+
+class PeerMatch(db.Model):
+    __tablename__ = "peer_matches"
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=gen_uuid)
+    requester_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    partner_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    status: Mapped[PeerMatchStatus] = mapped_column(Enum(PeerMatchStatus), default=PeerMatchStatus.PENDING)
+    reason: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+# --- Teaching assistant queue --------------------------------------------------
+
+class TeachingAssistantQueue(db.Model):
+    __tablename__ = "ta_queues"
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=gen_uuid)
+    course_offering_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("course_offerings.id", ondelete="CASCADE"), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), default="Default Queue")
+    description: Mapped[str | None] = mapped_column(Text)
+
+
+class TeachingAssistantTicket(db.Model):
+    __tablename__ = "ta_tickets"
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=gen_uuid)
+    queue_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("ta_queues.id", ondelete="CASCADE"), nullable=False)
+    student_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    topic: Mapped[str] = mapped_column(String(255))
+    description: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32), default="open")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+# --- Leaderboards & gamification ----------------------------------------------
+
+class Leaderboard(db.Model):
+    __tablename__ = "leaderboards"
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=gen_uuid)
+    school_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("schools.id", ondelete="CASCADE"), nullable=False)
+    name: Mapped[str] = mapped_column(String(255))
+    metric: Mapped[str] = mapped_column(String(64))  # attendance, volunteering
+    period: Mapped[str | None] = mapped_column(String(32))
+
+
+class LeaderboardEntry(db.Model):
+    __tablename__ = "leaderboard_entries"
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=gen_uuid)
+    leaderboard_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("leaderboards.id", ondelete="CASCADE"), nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    score: Mapped[float] = mapped_column(db.Float)
+    rank: Mapped[int | None] = mapped_column(Integer)
+
+    __table_args__ = (UniqueConstraint("leaderboard_id", "user_id", name="uq_leaderboard_user"),)
+
+
+# --- Graduation readiness ------------------------------------------------------
+
+class DegreeRequirement(db.Model):
+    __tablename__ = "degree_requirements"
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=gen_uuid)
+    program_code: Mapped[str] = mapped_column(String(64))
+    name: Mapped[str] = mapped_column(String(255))
+    description: Mapped[str | None] = mapped_column(Text)
+    credit_hours: Mapped[int | None] = mapped_column(Integer)
+
+
+class StudentRequirementStatus(db.Model):
+    __tablename__ = "student_requirement_statuses"
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=gen_uuid)
+    student_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    requirement_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("degree_requirements.id", ondelete="CASCADE"), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="pending")
+    progress_detail: Mapped[dict | None] = mapped_column(JSON)
+
+    __table_args__ = (UniqueConstraint("student_id", "requirement_id", name="uq_student_requirement"),)
+
+
+# --- Study plans & adaptive learning ------------------------------------------
+
+class StudyPlan(db.Model):
+    __tablename__ = "study_plans"
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=gen_uuid)
+    student_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    term_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("terms.id", ondelete="SET NULL"))
+    goal: Mapped[str | None] = mapped_column(Text)
+    strategy: Mapped[dict | None] = mapped_column(JSON)
+
+
+class StudyTask(db.Model):
+    __tablename__ = "study_tasks"
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=gen_uuid)
+    plan_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("study_plans.id", ondelete="CASCADE"), nullable=False)
+    title: Mapped[str] = mapped_column(String(255))
+    due_at: Mapped[datetime | None] = mapped_column(DateTime)
+    status: Mapped[str] = mapped_column(String(32), default="pending")
+    metadata: Mapped[dict | None] = mapped_column(JSON)
+
+
+class AdaptiveResource(db.Model):
+    __tablename__ = "adaptive_resources"
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=gen_uuid)
+    study_task_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("study_tasks.id", ondelete="CASCADE"), nullable=False)
+    modality: Mapped[str] = mapped_column(String(32))  # video, visual, textual
+    content_url: Mapped[str | None] = mapped_column(String(512))
+    notes: Mapped[str | None] = mapped_column(Text)
+
+
+# --- Research & grants ---------------------------------------------------------
+
+class ResearchGrant(db.Model):
+    __tablename__ = "research_grants"
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=gen_uuid)
+    title: Mapped[str] = mapped_column(String(255))
+    principal_investigator: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    budget: Mapped[int | None] = mapped_column(Integer)
+    status: Mapped[GrantStatus] = mapped_column(Enum(GrantStatus), default=GrantStatus.ACTIVE)
+    start_date: Mapped[date | None] = mapped_column(Date)
+    end_date: Mapped[date | None] = mapped_column(Date)
+    metadata: Mapped[dict | None] = mapped_column(JSON)
+
+
+class GrantMilestone(db.Model):
+    __tablename__ = "grant_milestones"
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=gen_uuid)
+    grant_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("research_grants.id", ondelete="CASCADE"), nullable=False)
+    title: Mapped[str] = mapped_column(String(255))
+    due_date: Mapped[date | None] = mapped_column(Date)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    notes: Mapped[str | None] = mapped_column(Text)
+
+
+# --- Conduct & discipline ------------------------------------------------------
+
+class DisciplinaryCase(db.Model):
+    __tablename__ = "disciplinary_cases"
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=gen_uuid)
+    student_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    title: Mapped[str] = mapped_column(String(255))
+    description: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[DisciplinaryStatus] = mapped_column(Enum(DisciplinaryStatus), default=DisciplinaryStatus.OPEN)
+    opened_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class DisciplinaryAction(db.Model):
+    __tablename__ = "disciplinary_actions"
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=gen_uuid)
+    case_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("disciplinary_cases.id", ondelete="CASCADE"), nullable=False)
+    action: Mapped[str] = mapped_column(String(255))
+    taken_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    notes: Mapped[str | None] = mapped_column(Text)
+
+
+# --- Alumni network ------------------------------------------------------------
+
+class AlumniProfile(db.Model):
+    __tablename__ = "alumni_profiles"
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=gen_uuid)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), unique=True)
+    graduation_year: Mapped[int | None] = mapped_column(Integer)
+    current_role: Mapped[str | None] = mapped_column(String(255))
+    location: Mapped[str | None] = mapped_column(String(255))
+    interests: Mapped[list[str] | None] = mapped_column(JSON)
+
+
+class AlumniEngagement(db.Model):
+    __tablename__ = "alumni_engagements"
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=gen_uuid)
+    alumni_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("alumni_profiles.id", ondelete="CASCADE"))
+    activity: Mapped[str] = mapped_column(String(255))  # donation, mentorship, event
+    detail: Mapped[str | None] = mapped_column(Text)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class AlumniMentorship(db.Model):
+    __tablename__ = "alumni_mentorships"
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=gen_uuid)
+    mentor_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("alumni_profiles.id", ondelete="CASCADE"), nullable=False)
+    mentee_student_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    status: Mapped[str] = mapped_column(String(32), default="active")
+
+
+# --- Plugin ecosystem ----------------------------------------------------------
+
+class PluginIntegration(db.Model):
+    __tablename__ = "plugin_integrations"
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=gen_uuid)
+    name: Mapped[str] = mapped_column(String(255), unique=True)
+    description: Mapped[str | None] = mapped_column(Text)
+    category: Mapped[str | None] = mapped_column(String(64))
+    metadata: Mapped[dict | None] = mapped_column(JSON)
+
+
+class PluginInstallation(db.Model):
+    __tablename__ = "plugin_installations"
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=gen_uuid)
+    plugin_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("plugin_integrations.id", ondelete="CASCADE"), nullable=False)
+    school_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("schools.id", ondelete="CASCADE"), nullable=False)
+    status: Mapped[PluginStatus] = mapped_column(Enum(PluginStatus), default=PluginStatus.ENABLED)
+    settings: Mapped[dict | None] = mapped_column(JSON)
+
+    __table_args__ = (UniqueConstraint("plugin_id", "school_id", name="uq_plugin_school"),)
+
+
+# --- Analytics -----------------------------------------------------------------
+
+class DashboardMetric(db.Model):
+    __tablename__ = "dashboard_metrics"
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=gen_uuid)
+    school_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("schools.id", ondelete="CASCADE"), nullable=False)
+    name: Mapped[str] = mapped_column(String(255))
+    value: Mapped[float] = mapped_column(db.Float)
+    captured_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    dimensions: Mapped[dict | None] = mapped_column(JSON)
+
+
+class UsageTrend(db.Model):
+    __tablename__ = "usage_trends"
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=gen_uuid)
+    school_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("schools.id", ondelete="CASCADE"), nullable=False)
+    metric: Mapped[str] = mapped_column(String(64))
+    period_start: Mapped[date] = mapped_column(Date)
+    period_end: Mapped[date] = mapped_column(Date)
+    value: Mapped[float] = mapped_column(db.Float)
+    notes: Mapped[str | None] = mapped_column(Text)
 
 
 # --- Dev utility ---------------------------------------------------------------
